@@ -40,12 +40,10 @@ void main() {
     await tester.tap(find.text('العربية'));
     await tester.pumpAndSettle();
 
-    // The app-name bar stays English even when the UI toggles to Arabic.
     expect(find.text('Detro'), findsOneWidget);
     expect(find.text('احسب الرحلة'), findsOneWidget);
     expect(find.text('محطة الانطلاق'), findsOneWidget);
 
-    // first station in Arabic alphabetical order appears at the top of the list
     await tester.tap(find.byIcon(Icons.list).first);
     await tester.pumpAndSettle();
     expect(find.text('أرض المعارض'), findsOneWidget);
@@ -55,7 +53,6 @@ void main() {
       (tester) async {
     await tester.pumpWidget(const DetroApp());
 
-    // 'adly mansor' — missing the u in Mansour
     await tester.enterText(find.byType(TextField).first, 'adly mansor');
     await tester.pumpAndSettle();
 

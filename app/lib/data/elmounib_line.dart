@@ -7,7 +7,7 @@ class ElMounibLine extends MetroLine {
         name: "elmounib",
         stations: elMounibStations,
         headwayMinutes: 3,
-        segmentMinutes: 2.5,
+        segmentMinutes: 2.0,
       );
 
   static const List<Station> elMounibStations = [

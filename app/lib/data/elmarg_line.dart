@@ -7,7 +7,7 @@ class ElMargLine extends MetroLine {
           name: "elmarg",
           stations: elMargStations,
           headwayMinutes: 2.5,
-          segmentMinutes: 2.4,
+          segmentMinutes: 2.0,
         );
 
   static const List<Station> elMargStations = [

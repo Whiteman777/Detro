@@ -10,6 +10,6 @@ class MetroLine {
     required this.name,
     required this.stations,
     this.headwayMinutes = 3,
-    this.segmentMinutes = 2.25,
+    this.segmentMinutes = 2.0,
   });
 }

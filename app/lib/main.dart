@@ -1,3 +1,4 @@
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -8,6 +9,9 @@ import 'data/elmounib_line.dart';
 import 'data/rod_elfarag_line.dart';
 import 'models/ticket.dart';
 import 'services/metro_graph.dart';
+import 'services/nearby_station_locator.dart';
+import 'package:geolocator/geolocator.dart';
+import 'theme.dart';
 import 'utils/normalize.dart';
 
 void main() {
@@ -18,9 +22,6 @@ enum AppLang { english, arabic }
 
 String _tr(AppLang lang, String en, String ar) =>
     lang == AppLang.arabic ? ar : en;
-
-
-
 
 String _formatDuration(AppLang lang, double minutes) {
   if (minutes < 60) {
@@ -65,73 +66,30 @@ class _DetroAppState extends State<DetroApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: _tr(_language, 'Detro', 'دترو'),
-      debugShowCheckedModeBanner: false,
-      locale: Locale(_language == AppLang.arabic ? 'ar' : 'en'),
-      supportedLocales: const [Locale('en'), Locale('ar')],
-      localizationsDelegates: const [
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-        GlobalCupertinoLocalizations.delegate,
-      ],
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF00C6A5),
+    return DynamicColorBuilder(
+      builder: (lightDynamic, darkDynamic) => MaterialApp(
+        title: _tr(_language, 'Detro', 'دترو'),
+        debugShowCheckedModeBanner: false,
+        locale: Locale(_language == AppLang.arabic ? 'ar' : 'en'),
+        supportedLocales: const [Locale('en'), Locale('ar')],
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        themeMode: ThemeMode.system,
+        theme: buildAppTheme(
+          brightness: Brightness.light,
+          dynamicScheme: lightDynamic,
+        ),
+        darkTheme: buildAppTheme(
           brightness: Brightness.dark,
-          surface: const Color(0xFF0E1417),
-          surfaceContainerHighest: const Color(0xFF1A2429),
+          dynamicScheme: darkDynamic,
         ),
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFF0A1012),
-        appBarTheme: const AppBarTheme(
-          centerTitle: true,
-          elevation: 0,
-          backgroundColor: Colors.transparent,
-          foregroundColor: Colors.white,
-          surfaceTintColor: Colors.transparent,
+        home: TripPlannerScreen(
+          language: _language,
+          onLanguageChanged: _setLanguage,
         ),
-        cardTheme: CardThemeData(
-          elevation: 0,
-          color: const Color(0xFF141C20),
-          clipBehavior: Clip.antiAlias,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: const BorderSide(color: Color(0xFF22303a)),
-          ),
-        ),
-        inputDecorationTheme: const InputDecorationTheme(
-          filled: true,
-          fillColor: Color(0xFF141C20),
-          contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.all(Radius.circular(16)),
-            borderSide: BorderSide.none,
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.all(Radius.circular(16)),
-            borderSide: BorderSide(color: Color(0xFF00C6A5), width: 2),
-          ),
-        ),
-        segmentedButtonTheme: SegmentedButtonThemeData(
-          style: ButtonStyle(
-            backgroundColor: WidgetStateProperty.resolveWith(
-              (s) => s.contains(WidgetState.selected)
-                  ? const Color(0xFF00C6A5)
-                  : const Color(0xFF141C20),
-            ),
-            foregroundColor: WidgetStateProperty.resolveWith(
-              (s) => s.contains(WidgetState.selected)
-                  ? const Color(0xFF00251C)
-                  : Colors.white70,
-            ),
-          ),
-        ),
-      ),
-      home: TripPlannerScreen(
-        language: _language,
-        onLanguageChanged: _setLanguage,
       ),
     );
   }
@@ -181,24 +139,126 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   final _startController = TextEditingController();
   final _stopController = TextEditingController();
-  GateMode _gateMode = GateMode.fewestStops;
+  GateMode _gateMode = GateMode.comfortable;
 
   TripResult? _result;
   String? _error;
+  bool _locating = false;
 
   @override
   void initState() {
     super.initState();
-    
-    
-    
-    
+
     _startController.addListener(_onFieldTextChanged);
     _stopController.addListener(_onFieldTextChanged);
   }
 
   void _onFieldTextChanged() {
     if (mounted) setState(() {});
+  }
+
+  Future<void> _locateStart() async {
+    if (_locating) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _locating = true);
+
+    final lang = widget.language;
+    LocateResult result;
+    try {
+      result = await NearbyStationLocator().nearestStation();
+    } catch (e) {
+      debugPrint('nearestStation threw: $e');
+      result = const LocateResult.failed(LocateFailure.unavailable);
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
+    if (!mounted) return;
+
+    if (result.isSuccess) {
+      final detected = result.station!;
+      final station = graph.stations.firstWhere(
+        (s) => normalize(s) == detected.station,
+        orElse: () => detected.station,
+      );
+      _startController.text = station;
+      final km = (detected.distanceMeters / 1000).toStringAsFixed(1);
+      _notify(
+        _tr(
+          lang,
+          'Nearest station: $station ($km km away)',
+          'أقرب محطة: $station (على بعد $km كم)',
+        ),
+      );
+      return;
+    }
+
+    await _handleLocateFailure(result.failure ?? LocateFailure.unavailable);
+  }
+
+  void _notify(String message, {SnackBarAction? action}) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        action: action,
+      ),
+    );
+  }
+
+  Future<void> _handleLocateFailure(LocateFailure failure) async {
+    final lang = widget.language;
+    switch (failure) {
+      case LocateFailure.serviceDisabled:
+        _notify(
+          _tr(
+            lang,
+            'Location is turned off on this device.',
+            'خدمة الموقع متوقفة على هذا الجهاز.',
+          ),
+          action: SnackBarAction(
+            label: _tr(lang, 'Settings', 'الإعدادات'),
+            onPressed: () => Geolocator.openLocationSettings(),
+          ),
+        );
+      case LocateFailure.permissionDenied:
+        _notify(
+          _tr(
+            lang,
+            'Detro needs location permission to find your nearest station.',
+            'يحتاج دترو إلى إذن الموقع لإيجاد أقرب محطة إليك.',
+          ),
+        );
+      case LocateFailure.permissionDeniedForever:
+        _notify(
+          _tr(
+            lang,
+            'Location permission was permanently denied. Allow it in app settings to use detection.',
+            'تم رفض إذن الموقع نهائيًا. اسمح به من إعدادات التطبيق لاستخدام تحديد الموقع.',
+          ),
+          action: SnackBarAction(
+            label: _tr(lang, 'Open', 'فتح'),
+            onPressed: () => Geolocator.openAppSettings(),
+          ),
+        );
+      case LocateFailure.noFix:
+        _notify(
+          _tr(
+            lang,
+            'Got no location fix. Move somewhere with a clearer view of the sky and try again.',
+            'لم يتم تحديد الموقع. انتقل إلى مكان مكشوف وحاول مرة أخرى.',
+          ),
+        );
+      case LocateFailure.unavailable:
+        _notify(
+          _tr(
+            lang,
+            'Location is not available on this device.',
+            'تحديد الموقع غير متاح على هذا الجهاز.',
+          ),
+        );
+    }
   }
 
   @override
@@ -299,9 +359,6 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
                 a.english.toLowerCase().compareTo(b.english.toLowerCase()),
     );
 
-    
-    
-    
     final selStart = normalize(_startController.text);
     final selStop = normalize(_stopController.text);
     final startFieldOptions = [
@@ -321,6 +378,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
           child: AppBar(
             title: const Text('Detro'),
             backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+            centerTitle: false,
           ),
         ),
       ),
@@ -344,19 +402,18 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
             SegmentedButton<GateMode>(
               segments: const [
                 ButtonSegment(
-                  value: GateMode.fewestStops,
-                  label: Text('Fewest stops'),
-                  icon: Icon(Icons.route),
+                  value: GateMode.comfortable,
+                  label: Text('Comfortable'),
+                  icon: Icon(Icons.airline_seat_recline_normal_outlined),
                 ),
                 ButtonSegment(
-                  value: GateMode.nearFirst,
-                  label: Text('Nearest first'),
-                  icon: Icon(Icons.near_me_outlined),
+                  value: GateMode.fastest,
+                  label: Text('Fastest'),
+                  icon: Icon(Icons.bolt_outlined),
                 ),
               ],
               selected: {_gateMode},
               onSelectionChanged: (s) => setState(() => _gateMode = s.first),
-
             ),
             const SizedBox(height: 16),
             _StationField(
@@ -370,6 +427,17 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
               pickerTooltip: _tr(lang, 'Choose from list', 'اختر من القائمة'),
               searchLabel: _tr(lang, 'Search stations', 'ابحث عن المحطات'),
               options: startFieldOptions,
+              trailingAction: IconButton(
+                icon: _locating
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.my_location),
+                tooltip: _tr(lang, 'Detect nearest station', 'اكشف أقرب محطة'),
+                onPressed: _locating ? null : _locateStart,
+              ),
             ),
             const SizedBox(height: 12),
             _StationField(
@@ -409,7 +477,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   }
 }
 
-class _StationField extends StatelessWidget {
+class _StationField extends StatefulWidget {
   const _StationField({
     required this.controller,
     required this.label,
@@ -417,6 +485,7 @@ class _StationField extends StatelessWidget {
     required this.pickerTooltip,
     required this.searchLabel,
     required this.options,
+    this.trailingAction,
   });
 
   final TextEditingController controller;
@@ -425,9 +494,47 @@ class _StationField extends StatelessWidget {
   final String pickerTooltip;
   final String searchLabel;
   final List<StationOption> options;
+  final Widget? trailingAction;
+
+  @override
+  State<_StationField> createState() => _StationFieldState();
+}
+
+class _StationFieldState extends State<_StationField> {
+  TextEditingController? _autocompleteController;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_syncFromOuter);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_syncFromOuter);
+    super.dispose();
+  }
+
+  void _syncFromOuter() {
+    final target = _autocompleteController;
+    if (target == null) return;
+    final text = widget.controller.text;
+    if (target.text == text) return;
+    target.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final label = widget.label;
+    final hintText = widget.hintText;
+    final pickerTooltip = widget.pickerTooltip;
+    final searchLabel = widget.searchLabel;
+    final options = widget.options;
+    final trailingAction = widget.trailingAction;
     return Autocomplete<StationOption>(
       optionsBuilder: (TextEditingValue value) {
         if (value.text.isEmpty) return const Iterable<StationOption>.empty();
@@ -450,6 +557,7 @@ class _StationField extends StatelessWidget {
       onSelected: (option) => controller.text = option.english,
       fieldViewBuilder:
           (context, fieldController, focusNode, onFieldSubmitted) {
+            _autocompleteController = fieldController;
             return TextField(
               controller: fieldController,
               focusNode: focusNode,
@@ -458,25 +566,34 @@ class _StationField extends StatelessWidget {
                 labelText: label,
                 hintText: hintText,
                 border: const OutlineInputBorder(),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.list),
-                  tooltip: pickerTooltip,
-                  onPressed: () async {
-                    final picked = await showModalBottomSheet<StationOption>(
-                      context: context,
-                      isScrollControlled: true,
-                      useSafeArea: true,
-                      backgroundColor: Theme.of(context).colorScheme.surface,
-                      builder: (context) => _StationPicker(
-                        options: options,
-                        searchLabel: searchLabel,
-                      ),
-                    );
-                    if (picked != null) {
-                      fieldController.text = picked.display;
-                      controller.text = picked.english;
-                    }
-                  },
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ?trailingAction,
+                    IconButton(
+                      icon: const Icon(Icons.list),
+                      tooltip: pickerTooltip,
+                      onPressed: () async {
+                        final picked =
+                            await showModalBottomSheet<StationOption>(
+                              context: context,
+                              isScrollControlled: true,
+                              useSafeArea: true,
+                              backgroundColor: Theme.of(context)
+                                  .colorScheme
+                                  .surface,
+                              builder: (context) => _StationPicker(
+                                options: options,
+                                searchLabel: searchLabel,
+                              ),
+                            );
+                        if (picked != null) {
+                          fieldController.text = picked.display;
+                          controller.text = picked.english;
+                        }
+                      },
+                    ),
+                  ],
                 ),
               ),
             );

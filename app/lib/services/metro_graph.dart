@@ -1,11 +1,12 @@
+import '../data/travel_times.dart';
 import '../models/metro_line.dart';
 import '../utils/normalize.dart';
 
-enum GateMode { fewestStops, nearFirst }
-
-
+enum GateMode { comfortable, fastest }
 
 const double transferDwellMinutes = 6.0;
+
+const double _transferPenaltyStops = 10000.0;
 
 class MetroGraph {
   late final List<MetroLine> _lines;
@@ -64,11 +65,11 @@ class MetroGraph {
   }
 
   String lineLabel(MetroLine line) => switch (line.name) {
-        'elmarg' => 'Line 1',
-        'elmounib' => 'Line 2',
-        'rodelfarag' || 'cairoUniversity' => 'Line 3',
-        _ => line.name,
-      };
+    'elmarg' => 'Line 1',
+    'elmounib' => 'Line 2',
+    'rodelfarag' || 'cairoUniversity' => 'Line 3',
+    _ => line.name,
+  };
 
   MetroLine? lineOfSegment(String a, String b) {
     for (final line in _lines) {
@@ -117,8 +118,11 @@ class MetroGraph {
   List<String> shortestPath(String start, String stop) =>
       shortestTrip(start, stop).stations;
 
-  TripRoute shortestTrip(String start, String stop,
-      {GateMode gateMode = GateMode.fewestStops}) {
+  TripRoute shortestTrip(
+    String start,
+    String stop, {
+    GateMode gateMode = GateMode.comfortable,
+  }) {
     if (start == stop) {
       return TripRoute(
         stations: [_displayNames[start]!],
@@ -130,9 +134,7 @@ class MetroGraph {
 
     final ordersByLine = <MetroLine, Map<String, int>>{
       for (final line in _lines)
-        line: {
-          for (final s in line.stations) normalize(s.name): s.order,
-        },
+        line: {for (final s in line.stations) normalize(s.name): s.order},
     };
 
     final linesOf = <String, Set<MetroLine>>{};
@@ -147,21 +149,23 @@ class MetroGraph {
     String nodeLine(String node) => node.substring(node.indexOf('|') + 1);
 
     final dist = <String, double>{};
+    final hopsTo = <String, int>{};
     final prev = <String, String>{};
     final discovered = <String>{};
     final settled = <String>{};
 
-    void relax(String node, double cost, String from) {
+    void relax(String node, double cost, String from, int hops) {
       final old = dist[node];
       if (old == null || cost < old) {
         dist[node] = cost;
+        hopsTo[node] = hops;
         prev[node] = from;
         if (!settled.contains(node)) discovered.add(node);
       }
     }
 
     for (final line in linesOf[start]!) {
-      relax(nodeOf(start, line), 0, nodeOf(start, line));
+      relax(nodeOf(start, line), 0, nodeOf(start, line), 0);
     }
 
     String? goal;
@@ -180,39 +184,33 @@ class MetroGraph {
 
       final cost = dist[best]!;
       final station = nodeStation(best);
-      final line =
-          ordersByLine.keys.firstWhere((l) => l.name == nodeLine(best));
+      final line = ordersByLine.keys.firstWhere(
+        (l) => l.name == nodeLine(best),
+      );
       final order = ordersByLine[line]![station]!;
 
+      final hopCost = switch (gateMode) {
+        GateMode.comfortable => 1.0,
+        GateMode.fastest => travelMinutesFrom(station),
+      };
       for (final nb in _neighbors[station] ?? const <String>[]) {
         final nbOrder = ordersByLine[line]![nb];
         if (nbOrder != null && (nbOrder - order).abs() == 1) {
-          relax(nodeOf(nb, line), cost + line.segmentMinutes, best);
+          relax(nodeOf(nb, line), cost + hopCost, best, hopsTo[best]! + 1);
         }
       }
       for (final other in linesOf[station] ?? const <MetroLine>{}) {
         if (other != line) {
-int nearBonus(String gate, MetroLine line, String start,
-      Map<MetroLine, Map<String, int>> ordersByLine) {
-    final orderLine = ordersByLine[line];
-    if (orderLine == null) return 0;
-    final s = orderLine[start];
-    final g = orderLine[gate];
-    if (s == null || g == null) return 0;
-    
-    
-    return ((s - g).abs()).clamp(0, 29) * 3;
-  }
-
-          
-          
-          
-          
-          final bonus = switch (gateMode) {
-            GateMode.fewestStops => 0,
-            GateMode.nearFirst => nearBonus(station, line, start, ordersByLine),
+          final transferCost = switch (gateMode) {
+            GateMode.comfortable => _transferPenaltyStops,
+            GateMode.fastest => transferDwellMinutes + walkMinutesAt(station),
           };
-          relax(nodeOf(station, other), cost + 10000 - bonus, best);
+          relax(
+            nodeOf(station, other),
+            cost + transferCost,
+            best,
+            hopsTo[best]!,
+          );
         }
       }
     }
@@ -245,21 +243,13 @@ int nearBonus(String gate, MetroLine line, String start,
       if (nodeLine(layered[i]) != nodeLine(layered[i + 1])) transfers++;
     }
 
-    
-    
-    
-    
-    
-    final lineByName = <String, MetroLine>{
-      for (final l in ordersByLine.keys) l.name: l,
-    };
     var minutes = 0.0;
     for (var i = 0; i < layered.length - 1; i++) {
       if (nodeLine(layered[i]) == nodeLine(layered[i + 1])) {
-        final l = lineByName[nodeLine(layered[i])];
-        if (l != null) minutes += l.segmentMinutes;
+        minutes += travelMinutesFrom(nodeStation(layered[i]));
       } else {
-        minutes += transferDwellMinutes;
+        minutes +=
+            transferDwellMinutes + walkMinutesAt(nodeStation(layered[i]));
       }
     }
 
